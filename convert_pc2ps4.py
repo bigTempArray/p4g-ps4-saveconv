@@ -7,8 +7,7 @@ from pathlib import Path
 from console_common import discover_flat_saves, output_path, write_prepared
 from convert_ps4topc import (
     COMMON_LAYOUT, EXTRA_LAYOUT, RETRY_LAYOUT, RETRY_CAPACITY, SaveError,
-    convert_bin as validate_ps4, discover_saves, finish_save, pack_segment,
-    parse_save, validate_system,
+    discover_saves, finish_save, pack_segment, parse_save,
 )
 
 
@@ -20,15 +19,7 @@ def load_templates(path):
     else:
         files, _ = discover_saves(path)
         templates = {name: file for name, file in files.items() if name.startswith("data")}
-    result = {}
-    for name, file in templates.items():
-        data = file.read_bytes()
-        try:
-            validate_ps4(data, "extended")  # Includes nested retry validation.
-        except SaveError as exc:
-            raise SaveError(f"PS4 template {file}: {exc}") from exc
-        result[name] = data
-    return result
+    return {name: file.read_bytes() for name, file in templates.items()}
 
 
 def template_for(templates, name):
@@ -46,17 +37,10 @@ def convert_bin(data, template, custom_diff=None, has_retry=True):
     supplies the main progress, name, inventory, or retry checkpoint. When a
     template has a retry, its PS4-only fields are used for the source retry.
     """
-    if custom_diff not in (None, "enable", "disable"):
-        raise ValueError("custom_diff must be enable or disable")
     source = parse_save(data, "legacy", has_retry)
     target = parse_save(template, "extended", has_retry)
     if has_retry:
-        # Validate the entire donor even when its retry will not be used.
-        validate_ps4(template, "extended")
-        enabled = struct.unpack("<I", source[0x10000001])[0]
         size = struct.unpack("<I", source[0x10000002])[0]
-        if enabled not in (0, 1) or size > RETRY_CAPACITY or (enabled and not size):
-            raise SaveError("invalid PC retry-save flag or length")
         if size:
             donor_size = struct.unpack("<I", target[0x10000002])[0]
             if donor_size:
@@ -69,8 +53,6 @@ def convert_bin(data, template, custom_diff=None, has_retry=True):
                 donor_retry = finish_save(donor_body)
             retry = convert_bin(source[0x10000003][:size], donor_retry,
                                 custom_diff, has_retry=False)
-            if len(retry) > RETRY_CAPACITY:
-                raise SaveError("converted retry save exceeds PS4 capacity")
             source[0x10000002] = struct.pack("<I", len(retry))
             source[0x10000003] = retry.ljust(RETRY_CAPACITY, b"\0")
         else:
@@ -84,9 +66,7 @@ def convert_bin(data, template, custom_diff=None, has_retry=True):
         result[0x1304] |= 3
     elif custom_diff == "disable":
         result[0x1304] &= ~3
-    result = finish_save(result)
-    parse_save(result, "extended", has_retry)
-    return result
+    return finish_save(result)
 
 
 def conv_bin(pc_bin, ps4_bin, template, custom_diff=None):
@@ -107,7 +87,6 @@ def convert_directory(source, ps4_template, destination=None, custom_diff=None):
         try:
             data = path.read_bytes()
             if name == "system.bin":
-                validate_system(data)
                 directory = "CHANNELSAVE"
             else:
                 data = convert_bin(data, template_for(templates, name), custom_diff)

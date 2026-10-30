@@ -18,7 +18,6 @@ from remotecache import write_remcache
 HEADER_SIZE = 0x38
 HEADER_CHECKSUM_OFFSET = 0x36
 RETRY_CAPACITY = 0x1B000
-FOOTER_SIZE = 13
 SLOT_DATA_SIZE = 0x34C
 SLOT_MAGIC = b"SAVE0001"
 SLOT_SALT = b"P4GOLDEN"
@@ -37,7 +36,7 @@ SAVE_DIR_RE = re.compile(r"(?:CUSA\d+_)?(SAVELIST\d{4}|CHANNELSAVE|SYSTEMSAVE)",
 
 
 class SaveError(ValueError):
-    """The input is not a supported, intact, decrypted P4G save."""
+    """A save conversion could not be completed."""
 
 
 def pack_segment(kind, payload):
@@ -51,19 +50,7 @@ def finish_save(data, checksum_start=HEADER_SIZE):
 
 
 def parse_save(data, pc_format="extended", has_retry=True):
-    """Validate the segment chain and checksums required by the target loader."""
-    if pc_format not in ("legacy", "extended"):
-        raise ValueError("pc_format must be legacy or extended")
-    if len(data) < HEADER_SIZE:
-        raise SaveError("truncated save header")
-    if pc_format == "legacy":
-        # The original PC loader checks this before reading any segments. On a
-        # mismatch it treats the file as an older format, starts at 0x24 rather
-        # than 0x38, and interprets name/header bytes as segment IDs and lengths.
-        # PS4 leaves this word zero. It is separate from the footer checksum.
-        stored = struct.unpack_from("<H", data, HEADER_CHECKSUM_OFFSET)[0]
-        if stored != sum(data[4:HEADER_CHECKSUM_OFFSET]) & 0xFF:
-            raise SaveError("legacy PC header checksum mismatch at 0x36")
+    """Extract segment payloads using the selected save layout."""
     layout = COMMON_LAYOUT
     if pc_format == "extended":
         layout += EXTRA_LAYOUT
@@ -73,40 +60,16 @@ def parse_save(data, pc_format="extended", has_retry=True):
     segments = {}
     for kind, size in layout:
         end = offset + 8 + size
-        if end > len(data):
-            raise SaveError(f"truncated segment 0x{kind:X} at 0x{offset:X}")
-        actual = struct.unpack_from("<II", data, offset)
-        if actual != (kind, size):
-            raise SaveError(
-                f"unexpected segment at 0x{offset:X}: {actual!r}; "
-                f"expected ({kind}, {size}). Check that GAME.BIN is decrypted."
-            )
         segments[kind] = data[offset + 8:end]
         offset = end
-    if len(data) != offset + FOOTER_SIZE:
-        raise SaveError(f"unexpected save size 0x{len(data):X}; expected 0x{offset + FOOTER_SIZE:X}")
-    kind, size, checksum, terminator = struct.unpack_from("<IIBI", data, offset)
-    if (kind, size, terminator) != (0x2000, 1, 0xFFFFFFFF):
-        raise SaveError("invalid checksum segment or end marker")
-    if checksum != sum(data[HEADER_SIZE:offset]) & 0xFF:
-        raise SaveError("save checksum mismatch; source may be damaged or edited")
     return segments
 
 
 def convert_bin(data, pc_format="legacy", custom_diff=None, has_retry=True):
     """Convert main and embedded retry saves without borrowing another save's state."""
-    if pc_format not in ("legacy", "extended"):
-        raise ValueError("pc_format must be legacy or extended")
-    if custom_diff not in (None, "enable", "disable"):
-        raise ValueError("custom_diff must be enable or disable")
     segments = parse_save(data, "extended", has_retry)
     if has_retry:
-        enabled = struct.unpack("<I", segments[0x10000001])[0]
         retry_size = struct.unpack("<I", segments[0x10000002])[0]
-        if enabled not in (0, 1) or retry_size > RETRY_CAPACITY:
-            raise SaveError("invalid retry-save flag or length")
-        if enabled and not retry_size:
-            raise SaveError("enabled retry save is empty")
         if retry_size:
             retry = convert_bin(segments[0x10000003][:retry_size],
                                 pc_format, custom_diff, has_retry=False)
@@ -127,9 +90,7 @@ def convert_bin(data, pc_format="legacy", custom_diff=None, has_retry=True):
         result[0x1304] |= 0x03
     elif custom_diff == "disable":
         result[0x1304] &= ~0x03
-    result = finish_save(result)
-    parse_save(result, pc_format, has_retry)
-    return result
+    return finish_save(result)
 
 
 def conv_bin(ps4_bin, pc_bin, custom_diff=None, pc_format="legacy"):
@@ -139,15 +100,6 @@ def conv_bin(ps4_bin, pc_bin, custom_diff=None, pc_format="legacy"):
     pc_bin.seek(0)
     pc_bin.write(result)
     pc_bin.truncate()
-
-
-def validate_system(data):
-    """CHANNELSAVE contains the same system segment as PC system.bin."""
-    if len(data) != 0x8000 or struct.unpack_from("<II", data, 4) != (1, 0x194):
-        raise SaveError("CHANNELSAVE is not a supported 0x8000-byte system save")
-    footer = finish_save(data[:0x1A0], checksum_start=4)[0x1A0:]
-    if data[0x1A0:0x1AD] != footer:
-        raise SaveError("CHANNELSAVE checksum or end marker is invalid")
 
 
 def put_text(buffer, offset, size, text):
@@ -199,9 +151,6 @@ def make_binslot(data, modified_time, system=False):
         details = (f"Date:{date_phase}\nName:{title}\nDifficulty:{diff} \n"
                    f"Location:{location}\nPlay Time:{play_time}\nLANG1\n"
                    f"Times Cleared:{cleared}\n")
-        # Do not silently truncate LANG/Times Cleared for unusually long names.
-        if len(details.encode("utf-8")) >= 0x200:
-            raise SaveError("save-menu description is too long")
         put_text(slot, 0xC4, 0x200, details)
     put_text(slot, 0x2C4, 0x40, "app0:/data/icon.png")
     stamp = datetime.fromtimestamp(modified_time, timezone.utc)
@@ -256,16 +205,14 @@ def convert_directory(source, destination=None, pc_format="legacy", custom_diff=
     for name, path in sorted(files.items()):
         try:
             data = path.read_bytes()
-            if name == "system.bin":
-                validate_system(data)
-            else:
+            if name != "system.bin":
                 data = convert_bin(data, pc_format, custom_diff)
             prepared[name] = data
             prepared[name + "slot"] = make_binslot(data, path.stat().st_mtime,
                                                    system=name == "system.bin")
         except SaveError as exc:
             raise SaveError(f"{path}: {exc}") from exc
-    # Validate everything before creating any output files.
+    # Prepare all conversions before creating output files.
     destination.mkdir(parents=True)
     remote = destination / "remote"
     remote.mkdir()

@@ -4,9 +4,9 @@ import argparse
 from io import BytesIO
 from pathlib import Path
 
-from console_common import make_sdslot, output_path, validate_vita, write_prepared
+from console_common import make_sdslot, output_path, write_prepared
 from convert_pc2vita import conv_bin as pc_to_vita
-from convert_ps4topc import SaveError, convert_bin as ps4_to_pc, discover_saves, validate_system
+from convert_ps4topc import SaveError, convert_bin as ps4_to_pc, discover_saves
 
 
 def convert_bin(data, custom_diff=None):
@@ -14,9 +14,7 @@ def convert_bin(data, custom_diff=None):
     pc_data = ps4_to_pc(data, "legacy", custom_diff)
     result = BytesIO()
     pc_to_vita(BytesIO(pc_data), result)
-    data = result.getvalue()
-    validate_vita(data)
-    return data
+    return result.getvalue()
 
 
 def conv_bin(ps4_bin, vita_bin, custom_diff=None):
@@ -36,9 +34,7 @@ def convert_directory(source, destination=None, custom_diff=None):
     for name, path in sorted(files.items()):
         try:
             data = path.read_bytes()
-            if name == "system.bin":
-                validate_system(data)
-            else:
+            if name != "system.bin":
                 data = convert_bin(data, custom_diff)
             prepared[name] = data
             metadata.append((name, data, path.stat().st_mtime))

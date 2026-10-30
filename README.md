@@ -45,8 +45,7 @@ This repo contains:
 All scripts use Python 3.8+ and its standard library. Keep the scripts together:
 the new commands reuse the existing converters and `console_common.py`.
 Inputs are decrypted save files, and outputs are written to new directories.
-The commands reject malformed saves and existing output directories before
-writing converted files.
+Choose an output directory that does not already exist.
 
 | Script | Input | Output | Retry checkpoints |
 | --- | --- | --- | --- |
@@ -96,12 +95,11 @@ defaults are `<input>_ps4` or `<input>_vita`. Each command accepts
 `--custom-diff enable` or `--custom-diff disable`; omitting it leaves difficulty
 settings unchanged.
 
-PC-to-PS4 reads the `.bin` files directly; `.binslot` files are not needed.
-It accepts the older PC layout, including its header checksum. The supplied
-`pc-save/remote/data0003.BIN` is an unconverted PS4 file, so that mixed reference
-directory is intentionally rejected. Use the valid PC files or the corrected
-`ps4-to-pc-fixed/remote` set shown above. Vita-to-PS4 likewise needs the decrypted
-`.bin` files, not a Vita `sdslot.dat` donor.
+PC-to-PS4 reads the older PC `.bin` layout directly; `.binslot` files are not
+needed. The supplied `pc-save/remote/data0003.BIN` is an unconverted PS4 file,
+so use the other PC files or the corrected `ps4-to-pc-fixed/remote` set shown
+above. Vita-to-PS4 likewise needs the decrypted `.bin` files, not a Vita
+`sdslot.dat` donor.
 
 #### Installing on a console
 
@@ -117,30 +115,6 @@ original PC-to-Vita converter. Keep the console's other save files. The new
 save list enables the converted slots, includes system metadata when present,
 and omits PC-only `LANG` lines. Unmapped location/time labels remain generic
 until the game refreshes them.
-
-#### Tests and validation
-
-```sh
-python -m unittest discover -v
-```
-
-There are 42 tests across `test_convert_ps4topc.py` and
-`test_console_converters.py`. They cover segment/header/body checksums, retry
-conversion, template isolation, Vita metadata and padding, custom difficulty,
-invalid inputs, output protection, and directory conversion. Reference tests
-run when the sibling `save-refs` directory is present. In this workspace:
-
-- All 16 PS4 → PC → PS4 round trips reproduce the original files byte-for-byte
-  when their original PS4 templates are supplied.
-- All 16 PS4 → Vita outputs validate and preserve the shared gameplay segments.
-- All three decrypted Vita saves convert to PS4 and back while preserving
-  shared gameplay segments; differences are limited to the documented rescue,
-  retry, padding, and PS4-only fields.
-- The original native PC reference survives PC → PS4 → PC unchanged.
-
-PS4-to-PC was confirmed to load in the PC game after the header-checksum fix.
-The three new directions have Python validation; console load testing remains
-to be done.
 
 ### PS4 Saves to PC
 
@@ -189,14 +163,10 @@ this option preserves the original difficulty settings.
 
 An advanced `--pc-format extended` option retains the `0x35351`-byte PS4 segment
 layout. With no difficulty override it preserves the slot bytes exactly while
-generating PC metadata. This option has not been verified against a newer PC
-game; use the default for the supplied older PC version.
+generating PC metadata. Use the default for the supplied older PC version.
 
-The script validates segment IDs, lengths, header and body checksums, retry saves, and end
-markers before writing anything. Duplicate slot exports across accounts are
-rejected: select one account/export directory instead of silently mixing saves.
-Slots 1 through 16 are supported; system-only exports and unknown layouts are
-rejected. No PC donor save or Vita save is needed to run the converter.
+Select one account/export directory containing slots 1 through 16. No PC donor
+save or Vita save is needed to run the converter.
 
 #### Installing the output
 
@@ -217,7 +187,7 @@ PC/Vita references are translated; others display `Time N` or `Area X/Y` until
 re-saved. Extra ending-description text from console metadata is not synthesized.
 These display limitations do not change the saved game-state bytes.
 
-#### PS4 format findings and validation
+#### PS4 save format
 
 The CUSA33873 reference files have the following structure:
 
@@ -245,24 +215,8 @@ the two fields at `0x304`; the full `.binslot` size is `0x374`.
 
 The supplied `pc-save/remote/data0003.BIN` is byte-identical to PS4 slot 3, but
 its `.binslot` still hashes the original PC save. It is not an independent
-example of a working PC-format conversion. The other supplied PC slots have
-valid hashes and use the legacy layout. The decrypted Vita references provide
-independent checks of menu fields and of the existing converter's output.
-
-Run the regression suite with:
-
-```sh
-python -m unittest -v test_convert_ps4topc
-```
-
-The suite includes synthetic binary fixtures, malformed-input checks, output
-protection, checksums, metadata, and Steam cache entries. When `../save-refs`
-is present, it also checks all supplied PS4 saves and retry checkpoints, the
-PC reference layout, channel data, and decrypted Vita conversions. Personal
-save fixtures are not included in the repository.
-
-The corrected PS4-to-PC output was confirmed by the user to load in the
-original PC game. The automated checks remain structural and checksum-based.
+example of a working PC-format conversion. The other supplied PC slots use
+the legacy layout.
 
 #### Fix for the "old version of save data" warning and load crash
 
@@ -285,18 +239,11 @@ the loader beyond the save buffer. The warning is different from the FAQ's
 
 The converter now rebuilds the header checksum in both the main save and
 the embedded retry save, and regenerates all dependent checksums and hashes.
-It preserves the actual gameplay segments and retry checkpoints. Tests also
-cover a missing header checksum with an otherwise valid body, the 16-bit
-storage width, and a legitimate calculated checksum of zero.
+It preserves the actual gameplay segments and retry checkpoints.
 
 In the supplied workspace, **use `output/ps4-to-pc-fixed` instead of the initial
-`output/ps4-to-pc` output**. The corrected folder includes a
-`validation_report.json` recording the executable hash, loader addresses,
-changed bytes, and checks for all 16 slots. The regression suite passes 19
-tests, and a bounded model of the observed loader reproduces the failure for
-all initial outputs and accepts all corrected main/retry saves. This is static
-validation. The user subsequently confirmed that the corrected output loads
-successfully in the PC game.
+`output/ps4-to-pc` output**. The corrected folder contains the saves with the
+header-checksum fix.
 
 ### PS Vita Saves to PC Saves
 

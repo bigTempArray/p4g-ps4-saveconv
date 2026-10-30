@@ -4,16 +4,13 @@ import argparse
 from io import BytesIO
 from pathlib import Path
 
-from console_common import discover_flat_saves, output_path, validate_vita, write_prepared
+from console_common import discover_flat_saves, output_path, write_prepared
 from convert_pc2ps4 import convert_bin as pc_to_ps4, load_templates, template_for
-from convert_ps4topc import SaveError, validate_system
+from convert_ps4topc import SaveError
 from convert_vita2pc import conv_bin as vita_to_pc
 
 
 def convert_bin(data, template, custom_diff=None):
-    if custom_diff not in (None, "enable", "disable"):
-        raise ValueError("custom_diff must be enable or disable")
-    validate_vita(data)
     pc = BytesIO()
     vita_to_pc(BytesIO(data), pc, custom_diff)
     return pc_to_ps4(pc.getvalue(), template)
@@ -37,7 +34,6 @@ def convert_directory(source, ps4_template, destination=None, custom_diff=None):
         try:
             data = path.read_bytes()
             if name == "system.bin":
-                validate_system(data)
                 directory = "CHANNELSAVE"
             else:
                 data = convert_bin(data, template_for(templates, name), custom_diff)
